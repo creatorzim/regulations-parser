@@ -1,4 +1,5 @@
 import requests
+from multiprocessing import Pool
 
 from regparser.notice.build import build_notice
 
@@ -28,9 +29,26 @@ def fetch_notice_json(cfr_title, cfr_part, only_final=False):
         return []
 
 
+class AsyncBuildFn(object):
+    def __init__(self, title, part):
+        self.title = title
+        self.part = part
+    def __call__(self, json_notice):
+        print "Processing:", json_notice['document_number']
+        return build_notice(self.title, self.part, json_notice)
+
 def fetch_notices(cfr_title, cfr_part, only_final=False):
     """Search and then convert to notice objects (including parsing)"""
     notices = []
-    for result in fetch_notice_json(cfr_title, cfr_part, only_final):
-        notices.extend(build_notice(cfr_title, cfr_part, result))
+    print "Fetching notices..."
+    json_notices = fetch_notice_json(cfr_title, cfr_part, only_final)
+
+    p = Pool(10)
+    print "Building notice objects..."
+    built_notices_lists = p.map(AsyncBuildFn(cfr_title, cfr_title), json_notices)
+
+    for built_notices_list in built_notices_lists:
+        notices.extend(built_notices_list)
+
+    print "Done."
     return notices
