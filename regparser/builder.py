@@ -1,4 +1,5 @@
 import copy
+from multiprocessing import Pool
 
 from regparser import api_writer, content
 from regparser.federalregister import fetch_notices
@@ -13,6 +14,27 @@ from regparser.notice.compiler import compile_regulation
 from regparser.tree import struct
 from regparser.tree.build import build_whole_regtree
 from regparser.tree.xml_parser import reg_text
+
+
+class AsyncLayerBuildFn(object):
+    def __init__(self, reg_tree, title, doc_number, notices, act_info, cache):
+        self.reg_tree = reg_tree
+        self.title = title
+        self.doc_number = doc_number
+        self.notices = notices
+        self.act_info = act_info
+        self.cache = cache
+
+    def __call__(self, item):
+        print "Processing:", self.doc_number
+        (ident, layer_class) = item
+        return (
+            ident,
+            layer_class(
+                self.reg_tree, self.title, self.doc_number, self.notices,
+                self.act_info
+            ).build(self.cache.cache_for(ident))
+        )
 
 
 class Builder(object):
@@ -44,7 +66,8 @@ class Builder(object):
     def gen_and_write_layers(self, reg_tree, act_info, cache, notices=None):
         if notices is None:
             notices = applicable_notices(self.notices, self.doc_number)
-        for ident, layer_class in (
+        p = Pool(16)
+        layer_tasks = (
                 ('external-citations',
                     external_citations.ExternalCitationParser),
                 ('meta', meta.Meta),
@@ -57,12 +80,13 @@ class Builder(object):
                 ('paragraph-markers', paragraph_markers.ParagraphMarkers),
                 ('keyterms', key_terms.KeyTerms),
                 ('formatting', formatting.Formatting),
-                ('graphics', graphics.Graphics)):
-            layer = layer_class(
-                reg_tree, self.cfr_title, self.doc_number, notices,
-                act_info).build(cache.cache_for(ident))
-            self.writer.layer(ident, self.cfr_part, self.doc_number).write(
-                layer)
+                ('graphics', graphics.Graphics))
+        layers = p.map(
+            AsyncLayerBuildFn(reg_tree, self.cfr_title, self.doc_number, notices, act_info, cache),
+            layer_tasks
+        )
+        for ident, layer in layers:
+            self.writer.layer(ident, self.cfr_part, self.doc_number).write(layer)
 
     def revision_generator(self, reg_tree):
         relevant_notices = []
